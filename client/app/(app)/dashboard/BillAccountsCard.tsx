@@ -1,0 +1,79 @@
+import { cookies } from 'next/headers';
+import { unstable_rethrow } from 'next/navigation';
+import { InfoCard, StatusLabel } from '@/components/ui/InfoCard';
+import { getBillStatusRows } from '@/lib/bills';
+
+export type BillStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approval_denied'
+  | 'pending_payment'
+  | 'processing'
+  | 'payment_success'
+  | 'payment_failed';
+
+export type BillStatusCounts = Record<BillStatus, number>;
+
+const EMPTY: BillStatusCounts = {
+  draft: 0,
+  pending_approval: 0,
+  approval_denied: 0,
+  pending_payment: 0,
+  processing: 0,
+  payment_success: 0,
+  payment_failed: 0,
+};
+
+// count the signed-in user's bills per status
+export async function getBillStatusCounts(): Promise<BillStatusCounts> {
+  const rows = await getBillStatusRows().catch((error) => {
+    // Next's prerender stops a no-store fetch by throwing; let Next handle that one
+    unstable_rethrow(error);
+    console.error(error);
+    return [];
+  });
+  const counts = { ...EMPTY };
+  for (const { status } of rows) if (status in counts) counts[status as BillStatus]++;
+  return counts;
+}
+
+// helper - bill status buckets
+function toBuckets(c: BillStatusCounts) {
+  const n = (s: BillStatus) => c[s] ?? 0;
+  return {
+    total: Object.values(c).reduce((sum, v) => sum + (v ?? 0), 0),
+    paid: n('payment_success'),
+    pendingReview: n('pending_approval') + n('pending_payment'),
+    needsAttention: n('payment_failed') + n('approval_denied'),
+  };
+}
+
+export async function BillAccountsCard() {
+  // await cookies() outside the catch so Next can handle its prerender rejection
+  await cookies();
+  const counts = await getBillStatusCounts().catch((error) => {
+    unstable_rethrow(error);
+    return EMPTY;
+  });
+  const b = toBuckets(counts);
+  const columns = [
+    { count: b.paid, label: 'Paid', tone: 'success' },
+    { count: b.pendingReview, label: 'Pending Review', tone: 'warning' },
+    { count: b.needsAttention, label: 'Need Attention', tone: 'danger' },
+  ] as const;
+
+  return (
+    <InfoCard title={`Bill Status (${b.total})`}>
+      <ul className="flex flex-wrap justify-between gap-4">
+        {columns.map(({ count, label, tone }) => (
+          <li key={label} className="flex flex-col gap-1">
+            <span className="text-body">
+              {count} {count === 1 ? 'Bill' : 'Bills'}
+            </span>
+            <StatusLabel tone={tone} label={label} />
+          </li>
+        ))}
+      </ul>
+    </InfoCard>
+  );
+}
